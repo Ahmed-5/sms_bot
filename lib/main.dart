@@ -19,7 +19,6 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  String _message = "";
   final telephony = Telephony.instance;
   List<Telegram> telegrams = [];
   List<Telegram> messages = [];
@@ -37,15 +36,13 @@ class _MyAppState extends State<MyApp> {
         body: message.body, address: message.address, isCurrentUser: false);
     setState(() {
       telegrams.add(newTele);
-      String text = "body: ${message.body} sender: ${message.address}";
-      _message = text ?? "Error reading message body.";
     });
   }
 
   onSendStatus(SendStatus status) {
-    setState(() {
-      _message = status == SendStatus.SENT ? "sent" : "delivered";
-    });
+    // setState(() {
+      // _message = status == SendStatus.SENT ? "sent" : "delivered";
+    // });
   }
 
   // Platform messages are asynchronous, so we initialize in an async method.
