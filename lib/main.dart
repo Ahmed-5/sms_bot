@@ -1,113 +1,215 @@
 import 'package:flutter/material.dart';
+import 'package:sms_bot/components/MessagesPage.dart';
+import 'package:sms_bot/repo/telegram.dart';
+import 'package:sms_bot/utils/utils.dart';
+import 'dart:async';
+import 'package:telephony/telephony.dart';
+
+onBackgroundMessage(SmsMessage message) {
+  debugPrint("onBackgroundMessage called");
+}
 
 void main() {
   runApp(MyApp());
 }
 
-class MyApp extends StatelessWidget {
-  // This widget is the root of your application.
+class MyApp extends StatefulWidget {
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // Try running your application with "flutter run". You'll see the
-        // application has a blue toolbar. Then, without quitting the app, try
-        // changing the primarySwatch below to Colors.green and then invoke
-        // "hot reload" (press "r" in the console where you ran "flutter run",
-        // or simply save your changes to "hot reload" in a Flutter IDE).
-        // Notice that the counter didn't reset back to zero; the application
-        // is not restarted.
-        primarySwatch: Colors.blue,
-      ),
-      home: MyHomePage(title: 'Flutter Demo Home Page'),
-    );
+  _MyAppState createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  String _message = "";
+  final telephony = Telephony.instance;
+  List<Telegram> telegrams = [];
+  List<Telegram> messages = [];
+  List<String> orderedKeys = [];
+  Map<String, List<Telegram>> conversations = {};
+
+  @override
+  void initState() {
+    super.initState();
+    initPlatformState();
   }
-}
 
-class MyHomePage extends StatefulWidget {
-  MyHomePage({Key key, this.title}) : super(key: key);
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
-  @override
-  _MyHomePageState createState() => _MyHomePageState();
-}
-
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-
-  void _incrementCounter() {
+  onMessage(SmsMessage message) async {
+    Telegram newTele = Telegram(
+        body: message.body, address: message.address, isCurrentUser: false);
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      telegrams.add(newTele);
+      String text = "body: ${message.body} sender: ${message.address}";
+      _message = text ?? "Error reading message body.";
     });
   }
 
+  onSendStatus(SendStatus status) {
+    setState(() {
+      _message = status == SendStatus.SENT ? "sent" : "delivered";
+    });
+  }
+
+  // Platform messages are asynchronous, so we initialize in an async method.
+  Future<void> initPlatformState() async {
+    // Platform messages may fail, so we use a try/catch PlatformException.
+    // If the widget was removed from the tree while the asynchronous platform
+    // message was in flight, we want to discard the reply rather than calling
+    // setState to update our non-existent appearance.
+
+    final bool result = await telephony.requestPhoneAndSmsPermissions;
+    List<SmsMessage> inConverses = await telephony.getInboxSms(
+      columns: [SmsColumn.ADDRESS, SmsColumn.BODY, SmsColumn.DATE],
+    );
+    int inCounter = 0;
+
+    List<SmsMessage> outConverses = await telephony.getSentSms(
+      columns: [SmsColumn.ADDRESS, SmsColumn.BODY, SmsColumn.DATE],
+    );
+    int outCounter = 0;
+
+    print("==========${outConverses.length + inConverses.length}===========");
+
+    List<Telegram> converses = [];
+    Map<String, List<Telegram>> newConv = {};
+    List<String> newOrderedKeys = [];
+
+    while (inCounter < inConverses.length || outCounter < outConverses.length) {
+      if (inCounter < inConverses.length &&
+          (outCounter >= outConverses.length ||
+              inConverses[inCounter].date > outConverses[outCounter].date)) {
+        SmsMessage message = inConverses[inCounter];
+        Telegram telegram = Telegram(
+          body: message.body,
+          address: message.address,
+          unixDate: message.date,
+          isCurrentUser: false,
+        );
+        inCounter++;
+        converses.add(telegram);
+        if (newConv.containsKey(telegram.address)) {
+          newConv[telegram.address].add(telegram);
+        } else {
+          newOrderedKeys.add(telegram.address);
+          newConv[telegram.address] = [telegram];
+        }
+      }
+
+      if (outCounter < outConverses.length &&
+          (inCounter >= inConverses.length ||
+              outConverses[outCounter].date > inConverses[inCounter].date)) {
+        SmsMessage message = outConverses[outCounter];
+        outCounter++;
+        Telegram telegram = Telegram(
+          body: message.body,
+          address: message.address,
+          unixDate: message.date,
+          isCurrentUser: true,
+        );
+        converses.add(telegram);
+        if (newConv.containsKey(telegram.address)) {
+          newConv[telegram.address].add(telegram);
+        } else {
+          newOrderedKeys.add(telegram.address);
+          newConv[telegram.address] = [telegram];
+        }
+      }
+    }
+
+    newConv.keys.forEach((key) {
+      newConv[key] = newConv[key].reversed.toList();
+    });
+
+    setState(() {
+      messages = converses;
+      conversations = newConv;
+      orderedKeys = newOrderedKeys;
+    });
+
+    print("++++++++++++++++++++++++++++++++++");
+    print("number of messages: ${converses.length}");
+    print("++++++++++++++++++++++++++++++++++");
+
+    if (result != null && result) {
+      telephony.listenIncomingSms(
+        onNewMessage: onMessage,
+        onBackgroundMessage: onBackgroundMessage,
+      );
+    }
+
+    if (!mounted) return;
+  }
+
+  final String mkey = "+249930077211";
+
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
-    return Scaffold(
-      appBar: AppBar(
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Invoke "debug painting" (press "p" in the console, choose the
-          // "Toggle Debug Paint" action from the Flutter Inspector in Android
-          // Studio, or the "Toggle Debug Paint" command in Visual Studio Code)
-          // to see the wireframe for each widget.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            Text(
-              'You have pushed the button this many times:',
-            ),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headline4,
-            ),
-          ],
+    return MaterialApp(
+      home: Scaffold(
+        appBar: AppBar(
+          title: const Text('Plugin example app'),
+        ),
+        body: ListView.builder(
+          padding: const EdgeInsets.all(8),
+          itemCount: orderedKeys.length,
+          itemBuilder: (BuildContext context, int index) {
+            return GestureDetector(
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => MessagesPage(
+                      contact: orderedKeys[index],
+                      messages: conversations[orderedKeys[index]],
+                    ),
+                  ),
+                );
+              },
+              child: Card(
+                elevation: 15,
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 5,
+                      ),
+                      CircleAvatar(
+                        radius: 25,
+                      ),
+                      SizedBox(
+                        width: 5,
+                      ),
+                      Expanded(
+                        flex: 3,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.spaceAround,
+                          children: [
+                            Text(orderedKeys[index]),
+                            Text(
+                              firstNChars(
+                                conversations[orderedKeys[index]].last.body,
+                                20,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: Center(
+                          child: Text(
+                            unixToMonthDay(
+                              conversations[orderedKeys[index]].last.unixDate,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
     );
   }
 }
